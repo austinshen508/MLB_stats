@@ -123,11 +123,42 @@ def fetch_player_stats(player_name, date=None):
     if batting.get("atBats", 0) == 0 and batting.get("plateAppearances", 0) == 0:
         return f"{player_name}（{game_date}）無打席紀錄（可能為投手出賽）"
 
-    # 賽季數據
+    # 賽季基本數據
     s_res = requests.get(f"https://statsapi.mlb.com/api/v1/people/{info['id']}/stats?stats=season&season=2026&group=hitting")
     s_stats = s_res.json().get("stats", [])
     s_splits = s_stats[0].get("splits", []) if s_stats else []
     season = s_splits[0].get("stat", {}) if s_splits else {}
+
+    # 賽季進階數據
+    adv_res = requests.get(f"https://statsapi.mlb.com/api/v1/people/{info['id']}/stats?stats=seasonAdvanced&season=2026&group=hitting")
+    adv_stats = adv_res.json().get("stats", [])
+    adv_splits = adv_stats[0].get("splits", []) if adv_stats else []
+    adv = adv_splits[0].get("stat", {}) if adv_splits else {}
+
+    # 計算 wOBA（2024 weights）
+    pa = int(season.get("plateAppearances", 0))
+    ubb = int(season.get("baseOnBalls", 0)) - int(season.get("intentionalWalks", 0))
+    hbp = int(season.get("hitByPitch", 0))
+    h = int(season.get("hits", 0))
+    doubles = int(season.get("doubles", 0))
+    triples = int(season.get("triples", 0))
+    hr = int(season.get("homeRuns", 0))
+    ab = int(season.get("atBats", 0))
+    ibb = int(season.get("intentionalWalks", 0))
+    sf = int(season.get("sacFlies", 0))
+    single = h - doubles - triples - hr
+    denom = ab + ubb + hbp + sf
+    if denom > 0:
+        woba = (0.690*ubb + 0.722*hbp + 0.888*single + 1.271*doubles + 1.616*triples + 2.101*hr) / denom
+        woba_str = f"{woba:.3f}"
+    else:
+        woba_str = "N/A"
+
+    # 計算 SwStr%
+    total_swings = int(adv.get("totalSwings", 0))
+    swing_miss = int(adv.get("swingAndMisses", 0))
+    total_pitches = int(adv.get("numberOfPitches", season.get("numberOfPitches", 0)))
+    swstr = f"{swing_miss/total_pitches*100:.1f}%" if total_pitches > 0 else "N/A"
 
     return json.dumps({
         "player": player_name,
@@ -139,7 +170,16 @@ def fetch_player_stats(player_name, date=None):
         "strikeOuts": batting.get("strikeOuts", 0),
         "atBats": batting.get("atBats", 0),
         "season_avg": season.get("avg", "N/A"),
+        "season_obp": season.get("obp", "N/A"),
         "season_slg": season.get("slg", "N/A"),
+        "season_ops": season.get("ops", "N/A"),
+        "season_iso": adv.get("iso", "N/A"),
+        "season_babip": season.get("babip", "N/A"),
+        "season_bb_pct": adv.get("walksPerPlateAppearance", "N/A"),
+        "season_k_pct": adv.get("strikeoutsPerPlateAppearance", "N/A"),
+        "season_p_pa": adv.get("pitchesPerPlateAppearance", "N/A"),
+        "season_woba": woba_str,
+        "season_swstr": swstr,
     })
 
 
