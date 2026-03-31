@@ -1,5 +1,7 @@
 import os
 import json
+import time
+import threading
 import requests
 import anthropic
 from datetime import datetime, timedelta
@@ -10,15 +12,16 @@ from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.messaging import (
     Configuration, ApiClient, MessagingApi,
-    ReplyMessageRequest, TextMessage
+    ReplyMessageRequest, PushMessageRequest, TextMessage
 )
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, "env.env"))
 
-LINE_TOKEN   = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
-LINE_SECRET  = os.getenv("LINE_CHANNEL_SECRET")
+LINE_TOKEN    = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
+LINE_SECRET   = os.getenv("LINE_CHANNEL_SECRET")
+LINE_USER_ID  = os.getenv("LINE_USER_ID")
 ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 app = Flask(__name__)
@@ -28,6 +31,9 @@ claude = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
 
 # 每個用戶的對話歷史（重啟後會清空）
 user_sessions: dict[str, list] = {}
+
+# 已通知的比賽（重啟後清空，最多重複通知一次）
+notified_games: set = set()
 
 ET = ZoneInfo("America/New_York")
 
@@ -245,6 +251,100 @@ def handle_message(event):
 @app.route("/", methods=["GET"])
 def health():
     return "MLB Notify Bot is running!", 200
+
+
+# ── 自動通知背景執行緒 ─────────────────────────────────────
+
+def get_game_status(team_id):
+    today = datetime.now(ET).strftime("%Y-%m-%d")
+    url = f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={today}&teamId={team_id}"
+    res = requests.get(url)
+    if res.status_code != 200:
+        return None, None
+    dates = res.json().get("dates", [])
+    if not dates:
+        return None, None
+    for game in dates[0].get("games", []):
+        return game["gamePk"], game["status"]["abstractGameState"]
+    return None, None
+
+
+def get_game_stats_message(player_id, team_name):
+    url = f"https://statsapi.mlb.com/api/v1/people/{player_id}/stats?stats=gameLog&season=2026"
+    res = requests.get(url)
+    stats = res.json().get("stats", [])
+    logs = stats[0].get("splits", []) if stats else []
+    if not logs:
+        return None
+    logs.sort(key=lambda x: x["date"], reverse=True)
+    latest = logs[0]
+    game_date = latest["date"]
+    game_id = latest["game"]["gamePk"]
+
+    box = requests.get(f"https://statsapi.mlb.com/api/v1/game/{game_id}/boxscore").json()
+    pid_key = f"ID{player_id}"
+    player_data = None
+    for side in ["home", "away"]:
+        team = box["teams"][side]
+        if pid_key in team.get("players", {}):
+            player_data = team["players"][pid_key]
+            break
+
+    if not player_data:
+        return None
+    batting = player_data.get("stats", {}).get("batting", {})
+    if batting.get("atBats", 0) == 0 and batting.get("plateAppearances", 0) == 0:
+        return None
+
+    s_res = requests.get(f"https://statsapi.mlb.com/api/v1/people/{player_id}/stats?stats=season&season=2026&group=hitting")
+    s_stats = s_res.json().get("stats", [])
+    s_splits = s_stats[0].get("splits", []) if s_stats else []
+    season = s_splits[0].get("stat", {}) if s_splits else {}
+
+    return (
+        f"{team_name} - {game_date}\n"
+        f"H: {batting.get('hits',0)} | HR: {batting.get('homeRuns',0)} | "
+        f"RBI: {batting.get('rbi',0)} | BB: {batting.get('baseOnBalls',0)} | "
+        f"SO: {batting.get('strikeOuts',0)} | AB: {batting.get('atBats',0)}\n"
+        f"賽季 AVG: {season.get('avg','N/A')} | SLG: {season.get('slg','N/A')}"
+    )
+
+
+def send_push_message(text):
+    with ApiClient(line_config) as api_client:
+        MessagingApi(api_client).push_message(
+            PushMessageRequest(
+                to=LINE_USER_ID,
+                messages=[TextMessage(text=text)]
+            )
+        )
+
+
+def notify_loop():
+    while True:
+        try:
+            messages = []
+            for name, info in players.items():
+                game_pk, status = get_game_status(info["team_id"])
+                if game_pk is None or status != "Final":
+                    continue
+                if str(game_pk) in notified_games:
+                    continue
+                stats = get_game_stats_message(info["id"], info["team"])
+                if stats:
+                    messages.append(f"📊 {name}\n{stats}")
+                    notified_games.add(str(game_pk))
+
+            if messages:
+                send_push_message("\n\n".join(messages))
+        except Exception as e:
+            print(f"[notify_loop error] {e}")
+
+        time.sleep(600)  # 每 10 分鐘檢查一次
+
+
+# 啟動背景通知執行緒
+threading.Thread(target=notify_loop, daemon=True).start()
 
 
 if __name__ == "__main__":
