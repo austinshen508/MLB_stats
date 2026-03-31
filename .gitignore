@@ -1,0 +1,5 @@
+env.env
+*.log
+notified_games.txt
+__pycache__/
+*.pyc
