@@ -32,8 +32,8 @@ claude = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
 # 每個用戶的對話歷史（重啟後會清空）
 user_sessions: dict[str, list] = {}
 
-# 已通知的比賽（重啟後清空，最多重複通知一次）
-notified_games: set = set()
+# 每位球員今天是否已通知（格式：{"大谷翔平": "2026-03-31"}）
+notified_today: dict = {}
 
 ET = ZoneInfo("America/New_York")
 
@@ -319,16 +319,17 @@ def notify_loop():
     while True:
         try:
             messages = []
+            today = datetime.now(ET).strftime("%Y-%m-%d")
             for name, info in players.items():
+                if notified_today.get(name) == today:
+                    continue
                 game_pk, status = get_game_status(info["team_id"])
                 if game_pk is None or status != "Final":
-                    continue
-                if str(game_pk) in notified_games:
                     continue
                 stats = get_game_stats_message(info["id"], info["team"], game_pk)
                 if stats:
                     messages.append(f"📊 {name}\n{stats}")
-                    notified_games.add(str(game_pk))
+                    notified_today[name] = today
 
             if messages:
                 send_push_message("\n\n".join(messages))
