@@ -326,7 +326,6 @@ def notify_loop():
             messages = []
             for name, info in players.items():
                 game_pk, status = get_game_status(info["team_id"])
-                print(f"[notify_loop] {name}: game_pk={game_pk}, status={status}")
                 if game_pk is None or status != "Final":
                     continue
                 if str(game_pk) in notified_games:
