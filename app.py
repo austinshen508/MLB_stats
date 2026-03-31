@@ -89,23 +89,26 @@ def fetch_player_stats(player_name, date=None):
     info = next((v for k, v in players.items() if player_name in k or k in player_name), None)
     if not info:
         return f"找不到球員：{player_name}，目前支援：{', '.join(players.keys())}"
-    url = f"https://statsapi.mlb.com/api/v1/people/{info['id']}/stats?stats=gameLog&season=2026"
-    res = requests.get(url)
-    stats = res.json().get("stats", [])
-    logs = stats[0].get("splits", []) if stats else []
-    if not logs:
-        return f"{player_name} 本賽季尚無出賽紀錄"
-    logs.sort(key=lambda x: x["date"], reverse=True)
-    if date:
-        query_date = resolve_date(date)
-        matched = [l for l in logs if l["date"] == query_date]
-        if not matched:
-            return f"{player_name} 在 {query_date} 沒有出賽紀錄"
-        target = matched[0]
+    query_date = resolve_date(date)
+    # 若指定日期找不到，往前最多找 7 天
+    for days_back in range(8):
+        check_date = str((datetime.strptime(query_date, "%Y-%m-%d") - timedelta(days=days_back)).date())
+        sched = requests.get(f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={check_date}&teamId={info['team_id']}").json()
+        dates = sched.get("dates", [])
+        if not dates:
+            continue
+        game = None
+        for g in dates[0].get("games", []):
+            if g["status"]["abstractGameState"] == "Final":
+                game = g
+                break
+        if game:
+            game_date = check_date
+            game_id = game["gamePk"]
+            break
     else:
-        target = logs[0]
-    game_date = target["date"]
-    game_id = target["game"]["gamePk"]
+        return f"{player_name} 最近 7 天沒有已結束的比賽紀錄"
+
     box = requests.get(f"https://statsapi.mlb.com/api/v1/game/{game_id}/boxscore").json()
     pid_key = f"ID{info['id']}"
     player_data = None
@@ -118,7 +121,7 @@ def fetch_player_stats(player_name, date=None):
         return f"{player_name}（{game_date}）無出賽紀錄"
     batting = player_data.get("stats", {}).get("batting", {})
     if batting.get("atBats", 0) == 0 and batting.get("plateAppearances", 0) == 0:
-        return f"{player_name}（{game_date}）無打席紀錄"
+        return f"{player_name}（{game_date}）無打席紀錄（可能為投手出賽）"
 
     # 賽季數據
     s_res = requests.get(f"https://statsapi.mlb.com/api/v1/people/{info['id']}/stats?stats=season&season=2026&group=hitting")
