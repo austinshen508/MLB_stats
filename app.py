@@ -269,17 +269,9 @@ def get_game_status(team_id):
     return None, None
 
 
-def get_game_stats_message(player_id, team_name):
-    url = f"https://statsapi.mlb.com/api/v1/people/{player_id}/stats?stats=gameLog&season=2026"
-    res = requests.get(url)
-    stats = res.json().get("stats", [])
-    logs = stats[0].get("splits", []) if stats else []
-    if not logs:
-        return None
-    logs.sort(key=lambda x: x["date"], reverse=True)
-    latest = logs[0]
-    game_date = latest["date"]
-    game_id = latest["game"]["gamePk"]
+def get_game_stats_message(player_id, team_name, game_pk):
+    game_id = game_pk
+    today = datetime.now(ET).strftime("%Y-%m-%d")
 
     box = requests.get(f"https://statsapi.mlb.com/api/v1/game/{game_id}/boxscore").json()
     pid_key = f"ID{player_id}"
@@ -302,7 +294,7 @@ def get_game_stats_message(player_id, team_name):
     season = s_splits[0].get("stat", {}) if s_splits else {}
 
     return (
-        f"{team_name} - {game_date}\n"
+        f"{team_name} - {today}\n"
         f"H: {batting.get('hits',0)} | HR: {batting.get('homeRuns',0)} | "
         f"RBI: {batting.get('rbi',0)} | BB: {batting.get('baseOnBalls',0)} | "
         f"SO: {batting.get('strikeOuts',0)} | AB: {batting.get('atBats',0)}\n"
@@ -330,7 +322,7 @@ def notify_loop():
                     continue
                 if str(game_pk) in notified_games:
                     continue
-                stats = get_game_stats_message(info["id"], info["team"])
+                stats = get_game_stats_message(info["id"], info["team"], game_pk)
                 if stats:
                     messages.append(f"📊 {name}\n{stats}")
                     notified_games.add(str(game_pk))
