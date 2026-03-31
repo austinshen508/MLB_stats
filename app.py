@@ -340,7 +340,7 @@ def notify_loop():
         except Exception as e:
             print(f"[notify_loop error] {e}")
 
-        time.sleep(600)  # 每 10 分鐘檢查一次
+        time.sleep(60)  # 每 1 分鐘檢查一次
 
 
 # 啟動背景通知執行緒
