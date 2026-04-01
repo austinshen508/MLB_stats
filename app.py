@@ -346,10 +346,14 @@ def get_game_stats_message(player_id, team_name, game_pk):
 
 
 def send_push_message(text):
-    with ApiClient(line_config) as api_client:
-        MessagingApi(api_client).broadcast(
-            BroadcastRequest(messages=[TextMessage(text=text)])
-        )
+    try:
+        with ApiClient(line_config) as api_client:
+            MessagingApi(api_client).broadcast(
+                BroadcastRequest(messages=[TextMessage(text=text)])
+            )
+        print("[broadcast] 發送成功")
+    except Exception as e:
+        print(f"[broadcast error] {e}")
 
 
 def notify_loop():
