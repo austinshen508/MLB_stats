@@ -12,7 +12,7 @@ from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.messaging import (
     Configuration, ApiClient, MessagingApi,
-    ReplyMessageRequest, PushMessageRequest, TextMessage
+    ReplyMessageRequest, PushMessageRequest, BroadcastRequest, TextMessage
 )
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 
@@ -347,11 +347,8 @@ def get_game_stats_message(player_id, team_name, game_pk):
 
 def send_push_message(text):
     with ApiClient(line_config) as api_client:
-        MessagingApi(api_client).push_message(
-            PushMessageRequest(
-                to=LINE_USER_ID,
-                messages=[TextMessage(text=text)]
-            )
+        MessagingApi(api_client).broadcast(
+            BroadcastRequest(messages=[TextMessage(text=text)])
         )
 
 
