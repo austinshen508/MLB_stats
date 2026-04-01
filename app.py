@@ -296,12 +296,6 @@ def health():
     return "MLB Notify Bot is running!", 200
 
 
-@app.route("/test-broadcast", methods=["GET"])
-def test_broadcast():
-    send_push_message("🔔 Broadcast 測試訊息")
-    return "Broadcast sent!", 200
-
-
 # ── 自動通知背景執行緒 ─────────────────────────────────────
 
 def get_game_status(team_id):
