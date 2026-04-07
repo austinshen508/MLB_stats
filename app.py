@@ -312,6 +312,32 @@ def get_game_status(team_id):
     return None, None
 
 
+def get_hr_video_url(game_pk, player_id):
+    try:
+        res = requests.get(f"https://statsapi.mlb.com/api/v1/game/{game_pk}/content", timeout=10)
+        items = res.json().get("highlights", {}).get("highlights", {}).get("items", [])
+        for item in items:
+            keywords = item.get("keywords", [])
+            is_player = any(
+                kw.get("type") == "playerId" and kw.get("value") == str(player_id)
+                for kw in keywords
+            )
+            is_hr = (
+                any("home_run" in kw.get("value", "").lower() for kw in keywords)
+                or "home run" in item.get("headline", "").lower()
+                or "homer" in item.get("headline", "").lower()
+            )
+            if is_player and is_hr:
+                for pb in item.get("playbacks", []):
+                    if pb.get("name") in ("mp4Avc", "hlsCloud", "mp4"):
+                        return pb.get("url")
+                if item.get("playbacks"):
+                    return item["playbacks"][0].get("url")
+    except Exception:
+        pass
+    return None
+
+
 def get_game_stats_message(player_id, team_name, game_pk):
     game_id = game_pk
     today = datetime.now(ET).strftime("%Y-%m-%d")
@@ -336,13 +362,19 @@ def get_game_stats_message(player_id, team_name, game_pk):
     s_splits = s_stats[0].get("splits", []) if s_stats else []
     season = s_splits[0].get("stat", {}) if s_splits else {}
 
-    return (
+    hr_count = batting.get("homeRuns", 0)
+    msg = (
         f"{team_name} - {today}\n"
-        f"H: {batting.get('hits',0)} | HR: {batting.get('homeRuns',0)} | "
+        f"H: {batting.get('hits',0)} | HR: {hr_count} | "
         f"RBI: {batting.get('rbi',0)} | BB: {batting.get('baseOnBalls',0)} | "
         f"SO: {batting.get('strikeOuts',0)} | AB: {batting.get('atBats',0)}\n"
         f"賽季 AVG: {season.get('avg','N/A')} | SLG: {season.get('slg','N/A')}"
     )
+    if hr_count > 0:
+        video_url = get_hr_video_url(game_pk, player_id)
+        if video_url:
+            msg += f"\n🎬 全壘打影片：{video_url}"
+    return msg
 
 
 def send_push_message(text):
