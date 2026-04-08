@@ -38,8 +38,8 @@ notified_today: dict = {}
 ET = ZoneInfo("America/New_York")
 
 players = {
-    "大谷翔平": {"id": 660271, "team": "Los Angeles Dodgers", "team_id": 119},
-    "James Wood": {"id": 695578, "team": "Washington Nationals", "team_id": 120},
+    "大谷翔平": {"id": 660271, "team": "Los Angeles Dodgers", "team_id": 119, "en_last_name": "Ohtani"},
+    "James Wood": {"id": 695578, "team": "Washington Nationals", "team_id": 120, "en_last_name": "Wood"},
 }
 
 # ── MLB 查詢工具 ──────────────────────────────────────────
@@ -312,33 +312,31 @@ def get_game_status(team_id):
     return None, None
 
 
-def get_hr_video_url(game_pk, player_id):
+def get_hr_video_url(game_pk, player_last_name):
     try:
         res = requests.get(f"https://statsapi.mlb.com/api/v1/game/{game_pk}/content", timeout=10)
         items = res.json().get("highlights", {}).get("highlights", {}).get("items", [])
+        name_lower = player_last_name.lower()
+        # 優先找「球員名字開頭 + home run」的 headline（直接 HR 影片）
         for item in items:
-            keywords = item.get("keywords", [])
-            is_player = any(
-                kw.get("type") == "playerId" and kw.get("value") == str(player_id)
-                for kw in keywords
-            )
-            is_hr = (
-                any("home_run" in kw.get("value", "").lower() for kw in keywords)
-                or "home run" in item.get("headline", "").lower()
-                or "homer" in item.get("headline", "").lower()
-            )
-            if is_player and is_hr:
+            h = item.get("headline", "").lower()
+            if name_lower in h and ("home run" in h or "homer" in h) and h.startswith(name_lower):
                 for pb in item.get("playbacks", []):
-                    if pb.get("name") in ("mp4Avc", "hlsCloud", "mp4"):
+                    if pb.get("name") in ("mp4Avc", "hlsCloud"):
                         return pb.get("url")
-                if item.get("playbacks"):
-                    return item["playbacks"][0].get("url")
+        # 備用：headline 含球員名字且含 home run（不限開頭）
+        for item in items:
+            h = item.get("headline", "").lower()
+            if name_lower in h and ("home run" in h or "homer" in h):
+                for pb in item.get("playbacks", []):
+                    if pb.get("name") in ("mp4Avc", "hlsCloud"):
+                        return pb.get("url")
     except Exception:
         pass
     return None
 
 
-def get_game_stats_message(player_id, team_name, game_pk):
+def get_game_stats_message(player_id, team_name, game_pk, player_last_name=""):
     game_id = game_pk
     today = datetime.now(ET).strftime("%Y-%m-%d")
 
@@ -370,8 +368,8 @@ def get_game_stats_message(player_id, team_name, game_pk):
         f"SO: {batting.get('strikeOuts',0)} | AB: {batting.get('atBats',0)}\n"
         f"賽季 AVG: {season.get('avg','N/A')} | SLG: {season.get('slg','N/A')}"
     )
-    if hr_count > 0:
-        video_url = get_hr_video_url(game_pk, player_id)
+    if hr_count > 0 and player_last_name:
+        video_url = get_hr_video_url(game_pk, player_last_name)
         if video_url:
             msg += f"\n🎬 全壘打影片：{video_url}"
     return msg
@@ -399,7 +397,7 @@ def notify_loop():
                 game_pk, status = get_game_status(info["team_id"])
                 if game_pk is None or status != "Final":
                     continue
-                stats = get_game_stats_message(info["id"], info["team"], game_pk)
+                stats = get_game_stats_message(info["id"], info["team"], game_pk, info.get("en_last_name", ""))
                 if stats:
                     messages.append(f"📊 {name}\n{stats}")
                     notified_today[name] = today
