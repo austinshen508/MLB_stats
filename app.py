@@ -33,7 +33,20 @@ claude = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
 user_sessions: dict[str, list] = {}
 
 # 每位球員今天是否已通知（格式：{"大谷翔平": "2026-03-31"}）
-notified_today: dict = {}
+NOTIFIED_FILE = os.path.join(BASE_DIR, "notified_today.json")
+
+def load_notified():
+    try:
+        with open(NOTIFIED_FILE, "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def save_notified(data):
+    with open(NOTIFIED_FILE, "w") as f:
+        json.dump(data, f)
+
+notified_today: dict = load_notified()
 
 ET = ZoneInfo("America/New_York")
 
@@ -299,17 +312,20 @@ def health():
 # ── 自動通知背景執行緒 ─────────────────────────────────────
 
 def get_game_status(team_id):
-    today = datetime.now(ET).strftime("%Y-%m-%d")
-    url = f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={today}&teamId={team_id}"
-    res = requests.get(url)
-    if res.status_code != 200:
-        return None, None
-    dates = res.json().get("dates", [])
-    if not dates:
-        return None, None
-    for game in dates[0].get("games", []):
-        return game["gamePk"], game["status"]["abstractGameState"]
-    return None, None
+    today = datetime.now(ET).date()
+    # 先查今天，若今天沒有 Final 則查昨天（夜場比賽可能跨過午夜才結束）
+    for days_back in range(2):
+        check_date = str(today - timedelta(days=days_back))
+        res = requests.get(f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={check_date}&teamId={team_id}")
+        if res.status_code != 200:
+            continue
+        dates = res.json().get("dates", [])
+        if not dates:
+            continue
+        for game in dates[0].get("games", []):
+            if game["status"]["abstractGameState"] == "Final":
+                return game["gamePk"], "Final", check_date
+    return None, None, None
 
 
 def get_hr_video_url(game_pk, player_last_name):
@@ -336,9 +352,9 @@ def get_hr_video_url(game_pk, player_last_name):
     return None
 
 
-def get_game_stats_message(player_id, team_name, game_pk, player_last_name=""):
+def get_game_stats_message(player_id, team_name, game_pk, player_last_name="", game_date=None):
     game_id = game_pk
-    today = datetime.now(ET).strftime("%Y-%m-%d")
+    today = game_date or datetime.now(ET).strftime("%Y-%m-%d")
 
     box = requests.get(f"https://statsapi.mlb.com/api/v1/game/{game_id}/boxscore").json()
     pid_key = f"ID{player_id}"
@@ -391,17 +407,26 @@ def notify_loop():
         try:
             messages = []
             today = datetime.now(ET).strftime("%Y-%m-%d")
+            changed = False
             for name, info in players.items():
-                if notified_today.get(name) == today:
-                    continue
-                game_pk, status = get_game_status(info["team_id"])
+                # 以 "name:game_date" 為 key，避免重啟後用 today 覆蓋昨日遊戲導致跳過今天
+                game_pk, status, game_date = get_game_status(info["team_id"])
                 if game_pk is None or status != "Final":
                     continue
-                stats = get_game_stats_message(info["id"], info["team"], game_pk, info.get("en_last_name", ""))
+                notify_key = f"{name}:{game_date}"
+                if notified_today.get(notify_key):
+                    continue
+                stats = get_game_stats_message(info["id"], info["team"], game_pk, info.get("en_last_name", ""), game_date)
+                # 無論有無打擊數據，都標記這場比賽已處理，避免重複
+                notified_today[notify_key] = today
+                changed = True
                 if stats:
                     messages.append(f"📊 {name}\n{stats}")
-                    notified_today[name] = today
+                else:
+                    print(f"[notify_loop] {name} 在 {game_date} 無打擊數據（可能為投手出賽或未上場）")
 
+            if changed:
+                save_notified(notified_today)
             if messages:
                 send_push_message("\n\n".join(messages))
         except Exception as e:
@@ -410,8 +435,23 @@ def notify_loop():
         time.sleep(60)  # 每 1 分鐘檢查一次
 
 
+def keepalive_loop():
+    """每 10 分鐘 ping 自己，防止 Render Free 方案休眠"""
+    app_url = os.getenv("RENDER_EXTERNAL_URL", "")
+    if not app_url:
+        print("[keepalive] 未設定 RENDER_EXTERNAL_URL，跳過 keepalive")
+        return
+    while True:
+        try:
+            requests.get(f"{app_url}/", timeout=10)
+            print("[keepalive] ping 成功")
+        except Exception as e:
+            print(f"[keepalive error] {e}")
+        time.sleep(600)  # 每 10 分鐘 ping 一次
+
 # 啟動背景通知執行緒
 threading.Thread(target=notify_loop, daemon=True).start()
+threading.Thread(target=keepalive_loop, daemon=True).start()
 
 
 if __name__ == "__main__":
