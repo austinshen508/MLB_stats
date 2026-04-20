@@ -472,7 +472,7 @@ def notify_loop():
                 notified_today[notify_key] = today
                 changed = True
                 if stats:
-                    icon = "🧤" if info.get("is_pitcher") else "🏏"
+                    icon = "⚾" if info.get("is_pitcher") else "🏏"
                     messages.append(f"{icon} {name}\n{stats}")
                 else:
                     print(f"[notify_loop] {name} 在 {game_date} 無出賽數據")
