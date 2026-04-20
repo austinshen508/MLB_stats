@@ -53,6 +53,7 @@ ET = ZoneInfo("America/New_York")
 players = {
     "大谷翔平": {"id": 660271, "team": "Los Angeles Dodgers", "team_id": 119, "en_last_name": "Ohtani"},
     "James Wood": {"id": 695578, "team": "Washington Nationals", "team_id": 120, "en_last_name": "Wood"},
+    "Mason Miller": {"id": 695243, "team": "San Diego Padres", "team_id": 135, "en_last_name": "Miller", "is_pitcher": True},
 }
 
 # ── MLB 查詢工具 ──────────────────────────────────────────
@@ -132,9 +133,38 @@ def fetch_player_stats(player_name, date=None):
             break
     if not player_data:
         return f"{player_name}（{game_date}）無出賽紀錄"
+
+    if info.get("is_pitcher"):
+        pitching = player_data.get("stats", {}).get("pitching", {})
+        ip = pitching.get("inningsPitched", "0.0")
+        if not pitching or (str(ip) in ("0.0", "0") and pitching.get("strikeOuts", 0) == 0):
+            return f"{player_name}（{game_date}）無投球紀錄"
+
+        s_res = requests.get(f"https://statsapi.mlb.com/api/v1/people/{info['id']}/stats?stats=season&season=2026&group=pitching")
+        s_stats = s_res.json().get("stats", [])
+        s_splits = s_stats[0].get("splits", []) if s_stats else []
+        season = s_splits[0].get("stat", {}) if s_splits else {}
+
+        return json.dumps({
+            "player": player_name,
+            "date": game_date,
+            "inningsPitched": ip,
+            "strikeOuts": pitching.get("strikeOuts", 0),
+            "walks": pitching.get("baseOnBalls", 0),
+            "earnedRuns": pitching.get("earnedRuns", 0),
+            "season_era": season.get("era", "N/A"),
+            "season_whip": season.get("whip", "N/A"),
+            "season_ip": season.get("inningsPitched", "N/A"),
+            "season_so": season.get("strikeOuts", "N/A"),
+            "season_bb": season.get("baseOnBalls", "N/A"),
+            "season_wins": season.get("wins", "N/A"),
+            "season_losses": season.get("losses", "N/A"),
+            "season_saves": season.get("saves", "N/A"),
+        })
+
     batting = player_data.get("stats", {}).get("batting", {})
     if batting.get("atBats", 0) == 0 and batting.get("plateAppearances", 0) == 0:
-        return f"{player_name}（{game_date}）無打席紀錄（可能為投手出賽）"
+        return f"{player_name}（{game_date}）無打席紀錄"
 
     # 賽季基本數據
     s_res = requests.get(f"https://statsapi.mlb.com/api/v1/people/{info['id']}/stats?stats=season&season=2026&group=hitting")
@@ -203,7 +233,7 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "team_name": {"type": "string", "description": "球員名字或球隊名稱，例如：大谷翔平、James Wood"},
+                "team_name": {"type": "string", "description": "球員名字或球隊名稱，例如：大谷翔平、James Wood、Mason Miller"},
                 "date": {"type": "string", "description": "日期，格式 YYYY-MM-DD 或 M/D。不填則查今天。"}
             },
             "required": ["team_name"]
@@ -215,7 +245,7 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "player_name": {"type": "string", "description": "球員名字，例如：大谷翔平、James Wood"},
+                "player_name": {"type": "string", "description": "球員名字，例如：大谷翔平、James Wood、Mason Miller"},
                 "date": {"type": "string", "description": "日期，格式 YYYY-MM-DD 或 M/D。不填則查最近一場。"}
             },
             "required": ["player_name"]
@@ -229,10 +259,12 @@ TOOL_FUNCS = {
 }
 
 SYSTEM_PROMPT = """你是一個 MLB 棒球助手，專門追蹤以下球員的比賽數據：
-- 大谷翔平（Shohei Ohtani）：洛杉磯道奇隊
-- James Wood：華盛頓國民隊
+- 大谷翔平（Shohei Ohtani）：洛杉磯道奇隊（打者）
+- James Wood：華盛頓國民隊（打者）
+- Mason Miller：聖地牙哥教士隊（投手）
 
 你可以使用工具查詢任意日期的比賽狀態和球員數據。
+Mason Miller 為投手，數據包含：IP（投球局數）、SO（三振）、BB（保送）、ER（自責失分）、ERA（自責失分率）、WHIP（被安打率）。
 今年是 2026 年。回答時請用繁體中文，訊息要簡潔，適合手機閱讀。不要使用 Markdown 格式。"""
 
 
@@ -352,7 +384,7 @@ def get_hr_video_url(game_pk, player_last_name):
     return None
 
 
-def get_game_stats_message(player_id, team_name, game_pk, player_last_name="", game_date=None):
+def get_game_stats_message(player_id, team_name, game_pk, player_last_name="", game_date=None, is_pitcher=False):
     game_id = game_pk
     today = game_date or datetime.now(ET).strftime("%Y-%m-%d")
 
@@ -367,6 +399,25 @@ def get_game_stats_message(player_id, team_name, game_pk, player_last_name="", g
 
     if not player_data:
         return None
+
+    if is_pitcher:
+        pitching = player_data.get("stats", {}).get("pitching", {})
+        ip = pitching.get("inningsPitched", "0.0")
+        if not pitching or (str(ip) in ("0.0", "0") and pitching.get("strikeOuts", 0) == 0):
+            return None
+
+        s_res = requests.get(f"https://statsapi.mlb.com/api/v1/people/{player_id}/stats?stats=season&season=2026&group=pitching")
+        s_stats = s_res.json().get("stats", [])
+        s_splits = s_stats[0].get("splits", []) if s_stats else []
+        season = s_splits[0].get("stat", {}) if s_splits else {}
+
+        return (
+            f"{team_name} - {today}\n"
+            f"IP: {ip} | SO: {pitching.get('strikeOuts', 0)} | "
+            f"BB: {pitching.get('baseOnBalls', 0)} | ER: {pitching.get('earnedRuns', 0)}\n"
+            f"Season ERA: {season.get('era', 'N/A')} | WHIP: {season.get('whip', 'N/A')}"
+        )
+
     batting = player_data.get("stats", {}).get("batting", {})
     if batting.get("atBats", 0) == 0 and batting.get("plateAppearances", 0) == 0:
         return None
@@ -416,14 +467,14 @@ def notify_loop():
                 notify_key = f"{name}:{game_date}"
                 if notified_today.get(notify_key):
                     continue
-                stats = get_game_stats_message(info["id"], info["team"], game_pk, info.get("en_last_name", ""), game_date)
+                stats = get_game_stats_message(info["id"], info["team"], game_pk, info.get("en_last_name", ""), game_date, info.get("is_pitcher", False))
                 # 無論有無打擊數據，都標記這場比賽已處理，避免重複
                 notified_today[notify_key] = today
                 changed = True
                 if stats:
                     messages.append(f"📊 {name}\n{stats}")
                 else:
-                    print(f"[notify_loop] {name} 在 {game_date} 無打擊數據（可能為投手出賽或未上場）")
+                    print(f"[notify_loop] {name} 在 {game_date} 無出賽數據")
 
             if changed:
                 save_notified(notified_today)
